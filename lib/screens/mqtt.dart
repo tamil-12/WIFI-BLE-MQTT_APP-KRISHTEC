@@ -1,10 +1,49 @@
+import 'dart:convert';
+import 'dart:io';
+import 'MqttConnectedPage.dart';
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
-import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class MqttConfig {
+  final String brokerUrl;
+  final int port;
+  final String topic;
+
+  MqttConfig(this.brokerUrl, this.port, this.topic);
+
+  factory MqttConfig.fromJson(Map<String, dynamic> json) {
+    return MqttConfig(
+      json['brokerUrl'] as String,
+      json['port'] as int,
+      json['topic'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'brokerUrl': brokerUrl,
+      'port': port,
+      'topic': topic,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is MqttConfig &&
+        other.brokerUrl == brokerUrl &&
+        other.port == port &&
+        other.topic == topic;
+  }
+
+  @override
+  int get hashCode => brokerUrl.hashCode ^ port.hashCode ^ topic.hashCode;
+}
 
 class MqttPage extends StatefulWidget {
-  const MqttPage({super.key});
+  const MqttPage({Key? key}) : super(key: key);
 
   @override
   _MqttPageState createState() => _MqttPageState();
@@ -12,22 +51,63 @@ class MqttPage extends StatefulWidget {
 
 class _MqttPageState extends State<MqttPage> {
   late MqttServerClient client;
-  bool connected = false;
   String message = '';
-  String? customTopic;
   TextEditingController messageController = TextEditingController();
   TextEditingController topicController = TextEditingController();
   TextEditingController brokerUrlController = TextEditingController();
   TextEditingController portController = TextEditingController();
+  List<MqttConfig> mqttConfigs = [];
 
   @override
   void initState() {
     super.initState();
+    loadSavedConfigs();
   }
 
-  void connectToMqtt() async {
-    client = MqttServerClient(brokerUrlController.text, '');
-    client.port = int.tryParse(portController.text) ?? 1883; // Default port is 1883
+  Future<void> loadSavedConfigs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String>? savedConfigs = prefs.getStringList('mqtt_configs');
+
+    if (savedConfigs != null) {
+      setState(() {
+        mqttConfigs = savedConfigs
+            .map((configJson) => MqttConfig.fromJson(jsonDecode(configJson)))
+            .toList();
+      });
+    }
+  }
+
+  Future<void> saveConfig(MqttConfig config) async {
+    if (!mqttConfigs.contains(config)) {
+      final prefs = await SharedPreferences.getInstance();
+      mqttConfigs.add(config);
+      prefs.setStringList(
+          'mqtt_configs', mqttConfigs.map((c) => jsonEncode(c.toJson())).toList());
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Configuration saved'),
+      ));
+      setState(() {});
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Duplicate configuration!'),
+      ));
+    }
+  }
+
+  Future<void> deleteConfig(int index) async {
+    final prefs = await SharedPreferences.getInstance();
+    mqttConfigs.removeAt(index);
+    prefs.setStringList(
+        'mqtt_configs', mqttConfigs.map((c) => jsonEncode(c.toJson())).toList());
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Configuration deleted'),
+    ));
+    setState(() {});
+  }
+
+  Future<void> connectToMqtt(MqttConfig config) async {
+    client = MqttServerClient(config.brokerUrl, '');
+    client.port = config.port;
     client.logging(on: false);
     client.keepAlivePeriod = 60;
     client.onDisconnected = onDisconnected;
@@ -56,13 +136,11 @@ class _MqttPageState extends State<MqttPage> {
 
     if (client.connectionStatus!.state == MqttConnectionState.connected) {
       print('Client connected');
-      setState(() {
-        connected = true;
-      });
-      // Navigate to the new page
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => TopicMessagePage(client: client)),
+        MaterialPageRoute(
+          builder: (context) => MqttConnectedPage(client: client,topic: config.topic),
+        ),
       );
     } else {
       print(
@@ -85,68 +163,93 @@ class _MqttPageState extends State<MqttPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('MQTT Page'),
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Text(
-                'MQTT Status: ${connected ? "Connected" : "Disconnected"}',
-              ),
-              const SizedBox(height: 20),
-
-              const SizedBox(height: 20),
-              Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: TextField(
-                  controller: brokerUrlController,
-                  onChanged: (value) {
-                    setState(() {});
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Enter MQTT Broker URL',
-                    border: OutlineInputBorder(),
+        actions: [
+          IconButton(
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Add MQTT Configuration'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: brokerUrlController,
+                        decoration: const InputDecoration(
+                          labelText: 'Enter MQTT Broker URL',
+                        ),
+                      ),
+                      TextField(
+                        controller: portController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Enter Port',
+                        ),
+                      ),
+                      TextField(
+                        controller: topicController,
+                        decoration: const InputDecoration(
+                          labelText: 'Enter Topic',
+                        ),
+                      ),
+                    ],
                   ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        final config = MqttConfig(
+                          brokerUrlController.text,
+                          int.parse(portController.text),
+                          topicController.text,
+                        );
+                        saveConfig(config);
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Save'),
+                    ),
+                  ],
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: TextField(
-                  controller: portController,
-                  keyboardType: TextInputType.number,
-                  onChanged: (value) {
-                    setState(() {});
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Enter Port',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () {
-                  if (connected) {
-                    disconnectFromMqtt();
-                  } else {
-                    connectToMqtt();
-                  }
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black
-                ),
-                child: Text('${connected ? 'Disconnect' : 'Connect'} to MQTT Broker',style: const TextStyle(color: Colors.white),),
-              ),
-            ],
+              );
+            },
+            icon: const Icon(Icons.add),
           ),
-        ),
+        ],
+      ),
+      body: Column(
+        children: [
+          ListView.builder(
+            shrinkWrap: true,
+            itemCount: mqttConfigs.length,
+            itemBuilder: (context, index) {
+              final config = mqttConfigs[index];
+              return ListTile(
+                title: Text(config.brokerUrl),
+                subtitle: Text(
+                    'Port: ${config.port}, Topic: ${config.topic}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.connect_without_contact),
+                      onPressed: () {
+                        connectToMqtt(config);
+                      },
+                    ),
+                    SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(Icons.delete),
+                      onPressed: () {
+                        deleteConfig(index);
+                      },
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
-  }
-
-  void disconnectFromMqtt() {
-    client.disconnect();
   }
 
   void onSubscribed(String topic) {
@@ -155,96 +258,14 @@ class _MqttPageState extends State<MqttPage> {
 
   void onDisconnected() {
     print('OnDisconnected client callback - Client disconnection');
-    if (client.connectionStatus!.disconnectionOrigin ==
-        MqttDisconnectionOrigin.solicited) {
-      print('OnDisconnected callback is solicited, this is correct');
-    }
-    setState(() {
-      connected = false;
-    });
   }
 
   void onConnected() {
     print('OnConnected client callback - Client connection was successful');
-    setState(() {
-      connected = true;
-    });
   }
 
   void pong() {
     print('Ping response client callback invoked');
-  }
-}
-
-class TopicMessagePage extends StatefulWidget {
-  final MqttServerClient client;
-
-  const TopicMessagePage({super.key, required this.client});
-
-  @override
-  _TopicMessagePageState createState() => _TopicMessagePageState();
-}
-
-class _TopicMessagePageState extends State<TopicMessagePage> {
-  final TextEditingController topicController = TextEditingController();
-  final TextEditingController messageController = TextEditingController();
-  bool messageSent = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Topic and Message'),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: TextField(
-                controller: topicController,
-                decoration: const InputDecoration(
-                  labelText: 'Enter Topic Name',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: TextField(
-                controller: messageController,
-                decoration: const InputDecoration(
-                  labelText: 'Enter Message',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () {
-                // Publish the message
-                publishMessage(topicController.text, messageController.text);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.black
-              ),
-              child: const Text('Publish Message',style: TextStyle(color: Colors.white),),
-            ),
-
-            const SizedBox(height: 20),
-            messageSent ? const Text('Message sent successfully!') : Container(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void publishMessage(String topic, String message) {
-    widget.client.publishMessage(topic, MqttQos.exactlyOnce, MqttClientPayloadBuilder().addString(message).payload!);
-    setState(() {
-      messageSent = true;
-    });
   }
 }
 

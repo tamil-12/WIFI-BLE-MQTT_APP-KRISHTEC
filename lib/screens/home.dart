@@ -110,7 +110,7 @@ class _HomeState extends State<Home> {
                  style: ElevatedButton.styleFrom(
                    backgroundColor: Colors.black,
                  ),
-                  child: const Text('Settings',style:TextStyle(color:Colors.white)),
+                  child: const Text('Node Settings',style:TextStyle(color:Colors.white)),
                 ),
               ],
             ],

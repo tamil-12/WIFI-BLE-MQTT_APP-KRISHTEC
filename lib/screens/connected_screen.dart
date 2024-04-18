@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'dart:convert';
 import 'package:syncfusion_flutter_gauges/gauges.dart'; // Import Syncfusion Flutter package
-import 'custom_chart.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 class ConnectedPage extends StatefulWidget {
   final String deviceId;
 
@@ -22,6 +22,7 @@ class _ConnectedPageState extends State<ConnectedPage> {
   final List<ItemModel> _items = []; // List to hold selected options
   bool _isSwitchOn = false; // Variable to hold switch state
   final bool _isDisconnected = false;
+  final Map<String, List<ItemModel>> _storedItems = {};
 
   set _isConnected(bool isConnected) {} // Variable to track disconnection status
 
@@ -35,6 +36,7 @@ class _ConnectedPageState extends State<ConnectedPage> {
       deviceId: widget.deviceId,
     );
     _subscribeToCharacteristic();
+    _restoreItems();
   }
   void _subscribeToCharacteristic() {
     _flutterReactiveBle.subscribeToCharacteristic(_characteristic).listen(
@@ -69,6 +71,25 @@ class _ConnectedPageState extends State<ConnectedPage> {
       },
     );
   }
+// Save added items to shared preferences
+  void _restoreItems() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String storedItemsString = prefs.getString(widget.deviceId) ?? '[]';
+    List<dynamic> storedItemsJson = jsonDecode(storedItemsString);
+    List<ItemModel> storedItems = storedItemsJson.map((itemJson) => ItemModel.fromJson(itemJson)).toList();
+    _storedItems[widget.deviceId] = storedItems;
+    setState(() {
+      _items.addAll(storedItems);
+    });
+  }
+
+  void _saveItems() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    List<dynamic> itemsJson = _items.map((item) => item.toJson()).toList();
+    String itemsString = jsonEncode(itemsJson);
+    prefs.setString(widget.deviceId, itemsString);
+  }
+
 
 
   void _handleReceivedData(List<int> data) {
@@ -204,7 +225,8 @@ class _ConnectedPageState extends State<ConnectedPage> {
           bool exists =true;
           if (exists) {
             setState(() {
-              _items.add(ItemModel(type: value)); // Add selected option to the list
+              _items.add(ItemModel(type: value));
+              _saveItems();// Add selected option to the list
             });
           } else {
             // Show error message for duplicate selection
@@ -255,7 +277,8 @@ class _ConnectedPageState extends State<ConnectedPage> {
                     key: Key(_items[index].type),
                     onDismissed: (direction) {
                       setState(() {
-                        _items.removeAt(index); // Remove item from the list
+                        _items.removeAt(index);
+                        _saveItems();// Remove item from the list
                       });
                     },
                     background: Container(color: Colors.red),
@@ -371,6 +394,7 @@ class _ConnectedPageState extends State<ConnectedPage> {
                           // Send data based on switch value
                           int dataToSend = value ? 1 : 0;
                           _sendData(dataToSend);
+                          _saveItems();
                         },
                       ),
                     ),
@@ -641,15 +665,44 @@ class _ConnectedPageState extends State<ConnectedPage> {
     super.dispose();
   }
 }
-
 class ItemModel {
   late String type;
   late String title;
   late double minRange;
   late double maxRange;
-  late double value; // Added to hold the value for Display items
-  int? selectedPin; // Updated to allow null value
+  late double value;
+  int? selectedPin;
 
-  ItemModel({required this.type, this.title = "", this.minRange = 0, this.maxRange = 100, this.value = 0, this.selectedPin});
+  ItemModel({
+    required this.type,
+    this.title = "",
+    this.minRange = 0,
+    this.maxRange = 100,
+    this.value = 0,
+    this.selectedPin,
+  });
+
+  // Convert item to JSON
+  Map<String, dynamic> toJson() {
+    return {
+      'type': type,
+      'title': title,
+      'minRange': minRange,
+      'maxRange': maxRange,
+      'value': value,
+      'selectedPin': selectedPin,
+    };
+  }
+
+  // Create item from JSON
+  factory ItemModel.fromJson(Map<String, dynamic> json) {
+    return ItemModel(
+      type: json['type'],
+      title: json['title'],
+      minRange: json['minRange'],
+      maxRange: json['maxRange'],
+      value: json['value'],
+      selectedPin: json['selectedPin'],
+    );
+  }
 }
-
